@@ -39,9 +39,17 @@ struct face_info
   uint32_t edge_first = 0;
   uint32_t edge_count = 0;
 
+  int32_t disp_first_vertex = -1;
+  int32_t disp_power = 0;
+
   size_t luxel_count() const
   {
     return size_t( width ) * size_t( height );
+  }
+
+  bool displacement() const
+  {
+    return disp_power > 0;
   }
 };
 

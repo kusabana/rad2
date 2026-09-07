@@ -43,6 +43,7 @@ public:
 
   std::vector<patch_node> nodes;
   std::vector<vec3> winding;
+  std::vector<vec2> winding_uv; // for displacements
   std::vector<int32_t> face_root;
   std::vector<vec4> root_plane;
   std::vector<uint32_t> leaves;

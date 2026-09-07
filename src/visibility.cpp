@@ -1,5 +1,6 @@
 #include "visibility.h"
 
+#include <algorithm>
 #include <bit>
 #include <cstring>
 #include <limits>
@@ -138,7 +139,8 @@ leaf_tables::leaf_tables( const bsp_file& bsp, int32_t cluster_count )
 }
 
 void build_cluster_faces( const patch_tree& tree, const cluster_visibility& vis,
-    const leaf_tables& leaves, transfer_tables& tables )
+    const leaf_tables& leaves, const std::vector<std::vector<uint32_t>>& disp_faces,
+    transfer_tables& tables )
 {
   const size_t clusters = size_t( vis.cluster_count );
   std::vector<std::vector<uint32_t>> per_cluster( clusters );
@@ -153,6 +155,17 @@ void build_cluster_faces( const patch_tree& tree, const cluster_visibility& vis,
 
         std::vector<uint32_t>& out = per_cluster[c];
         const std::span<const uint8_t> row = vis.row( int32_t( c ) );
+
+        const auto add_face = [&]( uint32_t face )
+        {
+          if ( stamp[face] == uint32_t( c ) )
+            return;
+
+          stamp[face] = uint32_t( c );
+
+          if ( tree.face_root[face] >= 0 )
+            out.push_back( face );
+        };
 
         // the visible clusters in ascending order
         for ( size_t byte = 0; byte < row.size(); ++byte )
@@ -171,16 +184,12 @@ void build_cluster_faces( const patch_tree& tree, const cluster_visibility& vis,
               for ( uint32_t fi = leaves.leaf_face_first[leaf];
                   fi < leaves.leaf_face_first[leaf + 1]; ++fi )
               {
-                const uint32_t face = leaves.leaf_faces[fi];
-                if ( stamp[face] == uint32_t( c ) )
-                  continue;
-
-                stamp[face] = uint32_t( c );
-
-                if ( tree.face_root[face] >= 0 )
-                  out.push_back( face );
+                add_face( leaves.leaf_faces[fi] );
               }
             }
+
+            for ( const uint32_t face : disp_faces[size_t( other )] )
+              add_face( face );
           }
         }
       } );
@@ -217,13 +226,25 @@ transfer_tables build_transfer_tables( const bsp_file& bsp, const patch_tree& tr
 
   const leaf_tables leaves( bsp, vis.cluster_count );
 
+  // displacement faces join the clusters of their patches
+  // utils/vrad/vismat.cpp:256
+  std::vector<std::vector<uint32_t>> disp_faces( size_t( vis.cluster_count ) );
+
   for ( const uint32_t leaf : tree.leaves )
   {
     const patch_node& patch = tree.nodes[leaf];
-    if ( !patch.sky && patch.cluster >= 0 && patch.cluster < vis.cluster_count )
+    if ( patch.cluster < 0 || patch.cluster >= vis.cluster_count )
+      continue;
+
+    if ( !patch.sky )
       tables.receivers.push_back( leaf );
+
+    std::vector<uint32_t>& list = disp_faces[size_t( patch.cluster )];
+    if ( bsp.faces[patch.face].dispinfo >= 0 &&
+         std::ranges::find( list, patch.face ) == list.end() )
+      list.push_back( patch.face );
   }
 
-  build_cluster_faces( tree, vis, leaves, tables );
+  build_cluster_faces( tree, vis, leaves, disp_faces, tables );
   return tables;
 }

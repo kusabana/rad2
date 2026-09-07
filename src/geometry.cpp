@@ -47,6 +47,26 @@ constexpr float max_reflectivity = 0.99f;
 
 // public/bspfile.h:32
 constexpr int32_t max_lightmap_width = 35;
+// public/bspfile.h:36
+constexpr int32_t max_disp_lightmap_width = 128;
+
+// public/bspfile.h:47
+constexpr int32_t min_disp_power = 2;
+constexpr int32_t max_disp_power = 4;
+
+// utils/vrad/vrad.h:542
+bool valid_displacement( const bsp_file& bsp, const dface& face )
+{
+  if ( face.dispinfo < 0 || size_t( face.dispinfo ) >= bsp.dispinfos.size() || face.num_edges != 4 )
+    return false;
+
+  const ddispinfo& disp = bsp.dispinfos[size_t( face.dispinfo )];
+  if ( disp.power < min_disp_power || disp.power > max_disp_power || disp.disp_vert_start < 0 )
+    return false;
+
+  const size_t width = size_t( 1 << disp.power ) + 1;
+  return size_t( disp.disp_vert_start ) + width * width <= bsp.disp_verts.size();
+}
 
 // face triangles sit this far off their brush
 constexpr float face_lift = 0.05f;
@@ -202,18 +222,16 @@ void collect_brush_occluders( const bsp_file& bsp, const std::unordered_set<uint
 
 } // namespace
 
-// utils/vrad/vrad_dispcoll.cpp:1078
+// utils/vrad/vrad_dispcoll.cpp:1064
 void scene_geometry::collect_displacement_occluders( const bsp_file& bsp )
 {
-  for ( const ddispinfo& disp : bsp.dispinfos )
+  for ( size_t face_index = 0; face_index < faces.size(); ++face_index )
   {
-    if ( disp.power < 1 || disp.power > 4 || disp.map_face >= faces.size() )
+    face_info& info = faces[face_index];
+    if ( !info.displacement() )
       continue;
 
-    const face_info& info = faces[disp.map_face];
-    if ( info.vertex_count != 4 )
-      continue;
-
+    const ddispinfo& disp = bsp.dispinfos[size_t( bsp.faces[face_index].dispinfo )];
     const std::span<const vec3> corners( face_vertex_position.data() + info.first_vertex, 4 );
 
     // the grid starts nearest the stored start position
@@ -231,10 +249,7 @@ void scene_geometry::collect_displacement_occluders( const bsp_file& bsp )
     const std::array<vec3, 2> edge_int = {
         ( points[1] - points[0] ) * oo_int, ( points[2] - points[3] ) * oo_int };
     const uint32_t base = uint32_t( vertices.size() );
-    const size_t vert_count = size_t( post_spacing ) * size_t( post_spacing );
-    if ( disp.disp_vert_start < 0 ||
-         size_t( disp.disp_vert_start ) + vert_count > bsp.disp_verts.size() )
-      continue;
+    info.disp_first_vertex = int32_t( base );
 
     for ( int32_t i = 0; i < post_spacing; ++i )
     {
@@ -259,15 +274,15 @@ void scene_geometry::collect_displacement_occluders( const bsp_file& bsp )
         const uint32_t c = a + uint32_t( post_spacing );
         const uint32_t d = c + 1;
 
-        if ( ( i + j ) & 1 )
-        {
-          occluder_indices.insert( occluder_indices.end(), { a, b, d } );
-          occluder_indices.insert( occluder_indices.end(), { a, d, c } );
-        }
-        else
+        if ( ( i * post_spacing + j ) & 1 )
         {
           occluder_indices.insert( occluder_indices.end(), { a, b, c } );
           occluder_indices.insert( occluder_indices.end(), { b, d, c } );
+        }
+        else
+        {
+          occluder_indices.insert( occluder_indices.end(), { a, b, d } );
+          occluder_indices.insert( occluder_indices.end(), { a, d, c } );
         }
       }
     }
@@ -320,6 +335,8 @@ void scene_geometry::build_face_infos( const bsp_file& bsp, const std::vector<in
     const dtexinfo& texinfo = bsp.texinfos[face.texinfo];
 
     info.surf_flags = texinfo.flags;
+    if ( valid_displacement( bsp, face ) )
+      info.disp_power = bsp.dispinfos[size_t( face.dispinfo )].power;
 
     if ( texinfo.texdata >= 0 && size_t( texinfo.texdata ) < bsp.texdatas.size() )
       info.reflectivity =
@@ -331,14 +348,14 @@ void scene_geometry::build_face_infos( const bsp_file& bsp, const std::vector<in
     if ( face.num_edges < 3 )
       continue;
 
-    if ( face.dispinfo >= 0 )
+    if ( face.dispinfo >= 0 && !info.displacement() )
       continue;
 
     info.width = face.lightmap_size[0] + 1;
     info.height = face.lightmap_size[1] + 1;
 
-    if ( info.width <= 0 || info.height <= 0 || info.width > max_lightmap_width ||
-         info.height > max_lightmap_width )
+    const int32_t max_width = info.displacement() ? max_disp_lightmap_width : max_lightmap_width;
+    if ( info.width <= 0 || info.height <= 0 || info.width > max_width || info.height > max_width )
       continue;
 
     // utils/vrad/lightmap.cpp:450
@@ -427,6 +444,9 @@ void scene_geometry::emit_face_triangles()
   for ( size_t face_index = 0; face_index < faces.size(); ++face_index )
   {
     const face_info& info = faces[face_index];
+    if ( info.displacement() )
+      continue;
+
     if ( !info.lightmapped && !( info.surf_flags & ( surf::sky | surf::sky2d ) ) )
       continue;
 

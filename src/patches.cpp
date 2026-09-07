@@ -12,6 +12,8 @@ namespace
 
 // utils/vrad/vrad.cpp:53
 constexpr float chop = 4.0f;
+// utils/vrad/vrad.cpp:55
+constexpr float disp_chop = 8.0f;
 constexpr float clip_epsilon = on_epsilon;
 
 // utils/common/polylib.h:30
@@ -47,6 +49,24 @@ vec3 winding_center( std::span<const vec3> winding )
     center += point;
 
   return center * ( 1.0f / float( winding.size() ) );
+}
+
+int longest_edge( std::span<const vec3> points )
+{
+  int longest = 0;
+  float best = -1.0f;
+
+  for ( size_t i = 0; i < points.size(); ++i )
+  {
+    const float length = glm::distance( points[i], points[( i + 1 ) % points.size()] );
+    if ( length > best )
+    {
+      best = length;
+      longest = int( i );
+    }
+  }
+
+  return longest;
 }
 
 struct winding_measure
@@ -165,12 +185,21 @@ struct patch_tree::builder
   std::vector<vec3> front;
   std::vector<vec3> back;
 
-  uint32_t add_node( const std::vector<vec3>& points, const patch_node& proto )
+  // the displacement being split
+  std::span<const vec3> grid;
+  int32_t grid_width = 0;
+  int grid_levels = 0;
+  float min_edge = 0.0f;
+
+  uint32_t add_node(
+      const std::vector<vec3>& points, const patch_node& proto, std::span<const vec2> uv = {} )
   {
     patch_node node = proto;
     node.winding_first = uint32_t( tree.winding.size() );
     node.winding_count = uint32_t( points.size() );
     tree.winding.insert( tree.winding.end(), points.begin(), points.end() );
+    tree.winding_uv.insert( tree.winding_uv.end(), uv.begin(), uv.end() );
+    tree.winding_uv.resize( tree.winding.size() );
     tree.nodes.push_back( node );
     return uint32_t( tree.nodes.size() - 1 );
   }
@@ -241,6 +270,139 @@ struct patch_tree::builder
     subdivide( first, luxscale );
     subdivide( second, luxscale );
   }
+
+  vec2 grid_uv( int32_t index ) const
+  {
+    return vec2( float( index % grid_width ), float( index / grid_width ) ) /
+           float( grid_width - 1 );
+  }
+
+  // utils/vrad/vrad_dispcoll.cpp:904
+  uint32_t add_triangle(
+      uint32_t parent, const std::vector<vec3>& points, std::span<const vec2> uv )
+  {
+    patch_node node = tree.nodes[parent];
+    node.child[0] = node.child[1] = -1;
+    const vec3 cross = glm::cross( points[2] - points[0], points[1] - points[0] );
+    node.origin = winding_center( points );
+    node.normal = safe_normalize( cross );
+    node.area = 0.5f * glm::length( cross );
+    return add_node( points, node, uv );
+  }
+
+  // the root quad and its two triangles
+  // utils/vrad/vrad_dispcoll.cpp:385, :421
+  void add_displacement( uint32_t face_index )
+  {
+    const face_info& info = geometry.faces[face_index];
+    grid_width = ( 1 << info.disp_power ) + 1;
+    grid_levels = 2 * info.disp_power;
+    grid = std::span<const vec3>( geometry.vertices.data() + info.disp_first_vertex,
+        size_t( grid_width ) * size_t( grid_width ) );
+
+    min_edge = disp_chop / glm::length( vec3( info.world_to_luxel_s ) );
+
+    const int32_t last = grid_width - 1;
+    const std::array<int32_t, 4> corner = { 0, last * grid_width, last * grid_width + last, last };
+    std::vector<vec3> points;
+    std::vector<vec2> uv;
+
+    for ( const int32_t index : corner )
+    {
+      points.push_back( grid[size_t( index )] );
+      uv.push_back( grid_uv( index ) );
+    }
+
+    patch_node root;
+    const vec3 cross = glm::cross( points[3] - points[0], points[1] - points[0] );
+    root.origin = winding_center( points );
+    root.normal = safe_normalize( cross );
+    root.area = glm::length( cross );
+    root.face = face_index;
+    root.child[0] = root.child[1] = -1;
+    root.cluster = -1;
+    root.sky = 0;
+
+    tree.face_root[face_index] = int32_t( tree.nodes.size() );
+    tree.root_plane[face_index] = vec4( root.normal, glm::dot( root.normal, points[0] ) );
+    const uint32_t index = add_node( points, root, uv );
+
+    const int longest = longest_edge( points );
+    if ( glm::distance( points[longest], points[( longest + 1 ) % 4] ) < min_edge ||
+         root.area < min_edge * min_edge )
+      return;
+
+    const std::array<std::array<int32_t, 3>, 2> child = {
+        { { corner[2], corner[0], corner[1] }, { corner[0], corner[2], corner[3] } } };
+
+    for ( size_t k = 0; k < 2; ++k )
+    {
+      std::vector<vec3> child_points;
+      std::vector<vec2> child_uv;
+
+      for ( const int32_t c : child[k] )
+      {
+        child_points.push_back( grid[size_t( c )] );
+        child_uv.push_back( grid_uv( c ) );
+      }
+
+      const uint32_t node = add_triangle( index, child_points, child_uv );
+      tree.nodes[index].child[k] = int32_t( node );
+      split_displacement( node, child[k], 0 );
+    }
+  }
+
+  // utils/vrad/vrad_dispcoll.cpp:528
+  void split_displacement( uint32_t index, const std::array<int32_t, 3>& corner, int level )
+  {
+    const patch_node node = tree.nodes[index];
+    const size_t first = node.winding_first;
+    const std::vector<vec3> points(
+        tree.winding.begin() + first, tree.winding.begin() + first + 3 );
+    const std::vector<vec2> uv(
+        tree.winding_uv.begin() + first, tree.winding_uv.begin() + first + 3 );
+
+    const int longest = longest_edge( points );
+    const int after = ( longest + 1 ) % 3;
+    if ( glm::distance( points[longest], points[after] ) < min_edge ||
+         node.area < 0.5f * min_edge * min_edge )
+      return;
+
+    std::array<std::vector<vec3>, 2> child_points;
+    std::array<std::vector<vec2>, 2> child_uv;
+    std::array<std::array<int32_t, 3>, 2> child_corner = { { { -1, -1, -1 }, { -1, -1, -1 } } };
+
+    if ( level < grid_levels )
+    {
+      const int32_t mid = ( corner[0] + corner[1] ) / 2;
+      child_corner = { { { corner[2], corner[0], mid }, { corner[1], corner[2], mid } } };
+
+      for ( size_t k = 0; k < 2; ++k )
+      {
+        for ( const int32_t c : child_corner[k] )
+        {
+          child_points[k].push_back( grid[size_t( c )] );
+          child_uv[k].push_back( grid_uv( c ) );
+        }
+      }
+    }
+    else
+    {
+      const int third = ( longest + 2 ) % 3;
+      const vec3 mid = ( points[longest] + points[after] ) * 0.5f;
+      const vec2 mid_uv = ( uv[longest] + uv[after] ) * 0.5f;
+      child_points = {
+          { { points[longest], mid, points[third] }, { mid, points[after], points[third] } } };
+      child_uv = { { { uv[longest], mid_uv, uv[third] }, { mid_uv, uv[after], uv[third] } } };
+    }
+
+    for ( size_t k = 0; k < 2; ++k )
+    {
+      const uint32_t child = add_triangle( index, child_points[k], child_uv[k] );
+      tree.nodes[index].child[k] = int32_t( child );
+      split_displacement( child, child_corner[k], level + 1 );
+    }
+  }
 };
 
 patch_tree::patch_tree( const bsp_file& bsp, const scene_geometry& geometry )
@@ -256,6 +418,12 @@ patch_tree::patch_tree( const bsp_file& bsp, const scene_geometry& geometry )
   {
     const face_info& info = geometry.faces[face_index];
     const dface& face = bsp.faces[face_index];
+    if ( info.displacement() )
+    {
+      splitter.add_displacement( uint32_t( face_index ) );
+      continue;
+    }
+
     if ( face.dispinfo >= 0 || info.vertex_count < 3 || face.texinfo < 0 )
       continue;
 
@@ -449,22 +617,39 @@ vec3 patch_tree::collect_light(
 namespace
 {
 
-void splat_leaf( const patch_tree& tree, const face_info& face, uint32_t leaf, const vec3& light,
-    std::vector<vec3>& value, std::vector<float>& weight )
+void splat_leaf( const patch_tree& tree, const face_info& face, uint32_t face_index, uint32_t leaf,
+    const vec3& light, std::vector<vec3>& value, std::vector<float>& weight )
 {
   const patch_node& node = tree.nodes[leaf];
-  const vec2 coord = world_to_st( face.world_to_luxel_s, face.world_to_luxel_t, node.origin );
-
-  // utils/vrad/radial.cpp:237
+  vec2 coord( 0.0f );
   vec2 mins( float_max );
   vec2 maxs( float_lowest );
 
-  for ( uint32_t j = 0; j < node.winding_count; ++j )
+  if ( face.displacement() && node.face == face_index )
   {
-    const vec2 c = world_to_st(
-        face.world_to_luxel_s, face.world_to_luxel_t, tree.winding[node.winding_first + j] );
-    mins = glm::min( mins, c );
-    maxs = glm::max( maxs, c );
+    // public/builddisp.cpp:510
+    const vec2 lightmap_end( float( face.width - 1 ), float( face.height - 1 ) );
+
+    for ( uint32_t j = 0; j < node.winding_count; ++j )
+    {
+      const vec2 c = tree.winding_uv[node.winding_first + j] * lightmap_end;
+      coord += c / float( node.winding_count );
+      mins = glm::min( mins, c );
+      maxs = glm::max( maxs, c );
+    }
+  }
+  else
+  {
+    coord = world_to_st( face.world_to_luxel_s, face.world_to_luxel_t, node.origin );
+
+    // utils/vrad/radial.cpp:237
+    for ( uint32_t j = 0; j < node.winding_count; ++j )
+    {
+      const vec2 c = world_to_st(
+          face.world_to_luxel_s, face.world_to_luxel_t, tree.winding[node.winding_first + j] );
+      mins = glm::min( mins, c );
+      maxs = glm::max( maxs, c );
+    }
   }
 
   const float dists = glm::max( 1.0f, maxs.x - mins.x );
@@ -518,7 +703,7 @@ void patch_tree::splat_bounce( const scene_geometry& geometry, const std::vector
               ++l )
           {
             const uint32_t leaf = face_leaves_[l];
-            splat_leaf( *this, face, leaf, bounce[leaf], value, weight );
+            splat_leaf( *this, face, uint32_t( face_index ), leaf, bounce[leaf], value, weight );
           }
         };
 

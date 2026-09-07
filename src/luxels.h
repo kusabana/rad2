@@ -30,5 +30,6 @@ public:
   std::vector<vec2> cell_maxs;
 
 private:
+  void sample_displacement( const scene_geometry& geometry, uint32_t face_index );
   void find_leaves( const scene_geometry& geometry, const bsp_file& bsp );
 };

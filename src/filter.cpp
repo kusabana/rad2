@@ -69,7 +69,7 @@ std::vector<uint32_t> steep_gradient_luxels( const scene_geometry& geometry,
 
   for ( const face_info& face : geometry.faces )
   {
-    if ( !face.lightmapped )
+    if ( !face.lightmapped || face.displacement() )
       continue;
 
     const uint32_t first = face.first_luxel;

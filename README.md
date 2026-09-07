@@ -11,7 +11,7 @@ Intel® Embree based Source Engine 2013 Lightmap Compiler
 
 A lot of comments have references to the VRAD source code which can be found at [source-sdk-2013](https://github.com/ValveSoftware/source-sdk-2013)
 
-Not implemented yet: texture lights, _minlight, displacement lighting, bumped lighting, leaf ambient cubes, lightstyles, static prop lighting
+Not implemented yet: texture lights, _minlight, bumped lighting, leaf ambient cubes, lightstyles, static prop lighting
 
 ## Requirements
 
