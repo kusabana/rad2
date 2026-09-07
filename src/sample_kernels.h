@@ -118,14 +118,11 @@ enum : uint32_t
 {
   occluder_id = 0, // brush sides and displacements
   sky_id = 1,
-  face_lm_id = 2, // lightmapped face triangles
 
   occluder_mask = 0x1,
   sky_mask = 0x2,
-  face_lm_mask = 0x10,
 
-  mask_world = occluder_mask | sky_mask, // shadow, sun and sky rays
-  mask_gather = occluder_mask | sky_mask | face_lm_mask,
+  mask_world = occluder_mask | sky_mask,
 };
 }
 

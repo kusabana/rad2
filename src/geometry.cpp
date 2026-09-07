@@ -68,9 +68,6 @@ bool valid_displacement( const bsp_file& bsp, const dface& face )
   return size_t( disp.disp_vert_start ) + width * width <= bsp.disp_verts.size();
 }
 
-// face triangles sit this far off their brush
-constexpr float face_lift = 0.05f;
-
 constexpr float phong_epsilon = 1.0e-12f;
 
 // vertex normals dedup on a fixed point key
@@ -435,7 +432,8 @@ void scene_geometry::build_edge_planes()
   }
 }
 
-void scene_geometry::emit_face_triangles()
+// utils/vrad/trace.cpp:612
+void scene_geometry::emit_sky_triangles()
 {
   vertices = face_vertex_position;
 
@@ -444,32 +442,15 @@ void scene_geometry::emit_face_triangles()
   for ( size_t face_index = 0; face_index < faces.size(); ++face_index )
   {
     const face_info& info = faces[face_index];
-    if ( info.displacement() )
-      continue;
-
-    if ( !info.lightmapped && !( info.surf_flags & ( surf::sky | surf::sky2d ) ) )
+    if ( info.model_index != 0 || !( info.surf_flags & ( surf::sky | surf::sky2d ) ) )
       continue;
 
     polygon.clear();
 
-    if ( info.surf_flags & ( surf::sky | surf::sky2d ) )
-    {
-      for ( uint32_t j = 0; j < info.vertex_count; ++j )
-        polygon.push_back( info.first_vertex + j );
-
-      emit_polygon( polygon, sky_indices );
-      continue;
-    }
-
-    const vec3 lift = info.plane_normal * face_lift;
-
     for ( uint32_t j = 0; j < info.vertex_count; ++j )
-    {
-      polygon.push_back( uint32_t( vertices.size() ) );
-      vertices.push_back( face_vertex_position[info.first_vertex + j] + lift );
-    }
+      polygon.push_back( info.first_vertex + j );
 
-    emit_polygon( polygon, face_lm_indices );
+    emit_polygon( polygon, sky_indices );
   }
 }
 
@@ -624,7 +605,7 @@ scene_geometry::scene_geometry( const bsp_file& bsp, const entity_lump& entities
 
   build_face_infos( bsp, face_model, model_origin );
   build_edge_planes();
-  emit_face_triangles();
+  emit_sky_triangles();
 
   collect_brush_occluders(
       bsp, collect_model_brushes( bsp, bsp.models[0].head_node ), vertices, occluder_indices );

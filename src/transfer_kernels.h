@@ -174,5 +174,5 @@ inline bool transfer_visible( const transfer_scene& scene, const ray_tracer& tra
   const float dist = glm::length( delta );
 
   return dist > ray_t_min &&
-         !tracer.occluded( { start, delta / dist, dist - ray_t_min, geom::mask_gather } );
+         !tracer.occluded( { start, delta / dist, dist - ray_t_min, geom::mask_world } );
 }

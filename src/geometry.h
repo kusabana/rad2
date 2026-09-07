@@ -61,7 +61,6 @@ public:
   vec3 phong_normal( uint32_t face_index, const vec3& spot ) const;
 
   std::vector<vec3> vertices;
-  std::vector<uint32_t> face_lm_indices;
   std::vector<uint32_t> sky_indices;
   std::vector<uint32_t> occluder_indices;
   std::vector<face_info> faces;
@@ -78,7 +77,7 @@ private:
   void build_face_infos( const bsp_file& bsp, const std::vector<int32_t>& face_model,
       const std::vector<vec3>& model_origin );
   void build_edge_planes();
-  void emit_face_triangles();
+  void emit_sky_triangles();
   void collect_displacement_occluders( const bsp_file& bsp );
   void build_smoothed_normals( const bsp_file& bsp );
   void dedup_vertex_normals();

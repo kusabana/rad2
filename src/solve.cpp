@@ -159,8 +159,6 @@ public:
         geometry.vertices, geometry.occluder_indices );
     attach_triangles( rtc_device_, scene_, geom::sky_id, geom::sky_mask, geometry.vertices,
         geometry.sky_indices );
-    attach_triangles( rtc_device_, scene_, geom::face_lm_id, geom::face_lm_mask, geometry.vertices,
-        geometry.face_lm_indices );
 
     rtcCommitScene( scene_ );
     traversable = rtcGetSceneTraversable( scene_ );
