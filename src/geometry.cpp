@@ -26,11 +26,10 @@ uint32_t face_vertex( const bsp_file& bsp, const dface& face, int32_t edge )
   return bsp.edges[size_t( surfedge )].vertex[0];
 }
 
-void emit_polygon( std::span<const uint32_t> polygon_vertices, std::vector<uint32_t>& indices )
+void emit_fan( uint32_t first, uint32_t count, std::vector<uint32_t>& indices )
 {
-  for ( size_t k = 2; k < polygon_vertices.size(); ++k )
-    indices.insert(
-        indices.end(), { polygon_vertices[0], polygon_vertices[k - 1], polygon_vertices[k] } );
+  for ( uint32_t k = 2; k < count; ++k )
+    indices.insert( indices.end(), { first, first + k - 1, first + k } );
 }
 
 // utils/common/polylib.cpp:296
@@ -159,7 +158,6 @@ void collect_brush_occluders( const bsp_file& bsp, const std::unordered_set<uint
 {
   std::vector<vec3> winding;
   std::vector<vec3> scratch;
-  std::vector<uint32_t> polygon;
 
   for ( const uint32_t brush_index : brush_set )
   {
@@ -204,15 +202,8 @@ void collect_brush_occluders( const bsp_file& bsp, const std::unordered_set<uint
         continue;
 
       grow_winding( winding, plane.normal );
-      polygon.clear();
-
-      for ( const vec3& p : winding )
-      {
-        polygon.push_back( uint32_t( pool.size() ) );
-        pool.push_back( p );
-      }
-
-      emit_polygon( polygon, indices );
+      emit_fan( uint32_t( pool.size() ), uint32_t( winding.size() ), indices );
+      pool.insert( pool.end(), winding.begin(), winding.end() );
     }
   }
 }
@@ -437,20 +428,13 @@ void scene_geometry::emit_sky_triangles()
 {
   vertices = face_vertex_position;
 
-  std::vector<uint32_t> polygon;
-
   for ( size_t face_index = 0; face_index < faces.size(); ++face_index )
   {
     const face_info& info = faces[face_index];
     if ( info.model_index != 0 || !( info.surf_flags & ( surf::sky | surf::sky2d ) ) )
       continue;
 
-    polygon.clear();
-
-    for ( uint32_t j = 0; j < info.vertex_count; ++j )
-      polygon.push_back( info.first_vertex + j );
-
-    emit_polygon( polygon, sky_indices );
+    emit_fan( info.first_vertex, info.vertex_count, sky_indices );
   }
 }
 
