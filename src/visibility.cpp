@@ -97,8 +97,6 @@ struct leaf_tables
 {
   std::vector<uint32_t> cluster_leaf_first;
   std::vector<uint32_t> cluster_leaves;
-  std::vector<uint32_t> leaf_face_first;
-  std::vector<uint32_t> leaf_faces;
 
   leaf_tables( const bsp_file& bsp, int32_t cluster_count );
 };
@@ -106,15 +104,11 @@ struct leaf_tables
 leaf_tables::leaf_tables( const bsp_file& bsp, int32_t cluster_count )
 {
   cluster_leaf_first.resize( size_t( cluster_count ) + 1 );
-  leaf_face_first.resize( bsp.leaves.size() + 1 );
 
-  for ( size_t i = 0; i < bsp.leaves.size(); ++i )
+  for ( const dleaf_v1& leaf : bsp.leaves )
   {
-    const dleaf_v1& leaf = bsp.leaves[i];
     if ( leaf.cluster >= 0 && leaf.cluster < cluster_count )
       ++cluster_leaf_first[size_t( leaf.cluster ) + 1];
-
-    leaf_face_first[i + 1] = leaf_face_first[i] + leaf.num_leaf_faces;
   }
 
   std::inclusive_scan(
@@ -123,24 +117,17 @@ leaf_tables::leaf_tables( const bsp_file& bsp, int32_t cluster_count )
   cluster_leaves.resize( cluster_leaf_first.back() );
   std::vector<uint32_t> cursor( cluster_leaf_first.begin(), cluster_leaf_first.end() - 1 );
 
-  leaf_faces.resize( leaf_face_first.back() );
-
   for ( size_t i = 0; i < bsp.leaves.size(); ++i )
   {
     const dleaf_v1& leaf = bsp.leaves[i];
     if ( leaf.cluster >= 0 && leaf.cluster < cluster_count )
       cluster_leaves[cursor[size_t( leaf.cluster )]++] = uint32_t( i );
-
-    for ( uint16_t f = 0; f < leaf.num_leaf_faces; ++f )
-    {
-      leaf_faces[leaf_face_first[i] + f] = bsp.leaf_faces[size_t( leaf.first_leaf_face ) + f];
-    }
   }
 }
 
-void build_cluster_faces( const patch_tree& tree, const cluster_visibility& vis,
-    const leaf_tables& leaves, const std::vector<std::vector<uint32_t>>& disp_faces,
-    transfer_tables& tables )
+void build_cluster_faces( const bsp_file& bsp, const patch_tree& tree,
+    const cluster_visibility& vis, const leaf_tables& leaves,
+    const std::vector<std::vector<uint32_t>>& disp_faces, transfer_tables& tables )
 {
   const size_t clusters = size_t( vis.cluster_count );
   std::vector<std::vector<uint32_t>> per_cluster( clusters );
@@ -179,12 +166,12 @@ void build_cluster_faces( const patch_tree& tree, const cluster_visibility& vis,
             for ( uint32_t li = leaves.cluster_leaf_first[other];
                 li < leaves.cluster_leaf_first[other + 1]; ++li )
             {
-              const uint32_t leaf = leaves.cluster_leaves[li];
+              const dleaf_v1& leaf = bsp.leaves[leaves.cluster_leaves[li]];
 
-              for ( uint32_t fi = leaves.leaf_face_first[leaf];
-                  fi < leaves.leaf_face_first[leaf + 1]; ++fi )
+              for ( const uint16_t face :
+                  bsp.leaf_faces.subspan( leaf.first_leaf_face, leaf.num_leaf_faces ) )
               {
-                add_face( leaves.leaf_faces[fi] );
+                add_face( face );
               }
             }
 
@@ -245,6 +232,6 @@ transfer_tables build_transfer_tables( const bsp_file& bsp, const patch_tree& tr
       list.push_back( patch.face );
   }
 
-  build_cluster_faces( tree, vis, leaves, disp_faces, tables );
+  build_cluster_faces( bsp, tree, vis, leaves, disp_faces, tables );
   return tables;
 }
