@@ -235,102 +235,96 @@ inline bool skybox_clear( const sample_scene& scene, rtc::traversable traversabl
   return hit == RTC_INVALID_GEOMETRY_ID || hit == geom::sky_id;
 }
 
-struct direct_sample
+inline vec3 direct_sample( const sample_scene& scene, rtc::traversable traversable,
+    uint32_t luxel_index, const vec3& position, const kernel_params& params )
 {
-  vec3 operator()( const sample_scene& scene, rtc::traversable traversable, uint32_t luxel_index,
-      const vec3& position, const kernel_params& params ) const
+  const luxel& sample = scene.luxels[luxel_index];
+  const face_info& face = scene.faces[sample.face_index];
+  const float scale = offset_scale( sample.position );
+  const vec3 shadow_origin = position + face.plane_normal * ( sample_lift * scale );
+  vec3 sum( 0.0f );
+
+  for ( uint32_t li = 0; li < scene.light_count; ++li )
   {
-    const luxel& sample = scene.luxels[luxel_index];
-    const face_info& face = scene.faces[sample.face_index];
-    const float scale = offset_scale( sample.position );
-    const vec3 shadow_origin = position + face.plane_normal * ( sample_lift * scale );
-    vec3 sum( 0.0f );
+    const light_eval eval =
+        evaluate_standard_light( scene.lights[li], shadow_origin, sample.normal );
+    if ( max_component( eval.contribution ) < light_cutoff )
+      continue;
 
-    for ( uint32_t li = 0; li < scene.light_count; ++li )
+    if ( eval.distance > ray_t_min &&
+         occluded( traversable, shadow_origin, eval.to_light, eval.distance ) )
     {
-      const light_eval eval =
-          evaluate_standard_light( scene.lights[li], shadow_origin, sample.normal );
-      if ( max_component( eval.contribution ) < light_cutoff )
-        continue;
-
-      if ( eval.distance > ray_t_min &&
-           occluded( traversable, shadow_origin, eval.to_light, eval.distance ) )
-      {
-        continue;
-      }
-
-      sum += eval.contribution;
+      continue;
     }
 
-    if ( max_component( scene.sky.sun_intensity ) > 0.0f )
-    {
-      const vec3 to_sun = -scene.sky.sun_normal;
-      const float n_dot_l = glm::dot( sample.normal, to_sun );
-      if ( n_dot_l > 0.0f )
-      {
-        const vec3 sky_origin = position + face.plane_normal * ( sample_lift * scale );
-        const uint32_t rays = scene.sky.sun_extent_sin > 0.0f ? params.sun_samples : 1;
-        uint32_t visible = 0;
-
-        for ( uint32_t r = 0; r < rays; ++r )
-        {
-          const vec3 direction = sun_jitter_direction( to_sun, scene.sky.sun_extent_sin, r );
-          if ( closest_geometry( traversable, sky_origin, direction, ray_t_max ) == geom::sky_id &&
-               skybox_clear( scene, traversable, sample.area, sky_origin, direction ) )
-          {
-            ++visible;
-          }
-        }
-
-        if ( visible > 0 )
-          sum += scene.sky.sun_intensity * ( n_dot_l * float( visible ) / float( rays ) );
-      }
-    }
-
-    return sum;
+    sum += eval.contribution;
   }
-};
+
+  if ( max_component( scene.sky.sun_intensity ) > 0.0f )
+  {
+    const vec3 to_sun = -scene.sky.sun_normal;
+    const float n_dot_l = glm::dot( sample.normal, to_sun );
+    if ( n_dot_l > 0.0f )
+    {
+      const vec3 sky_origin = position + face.plane_normal * ( sample_lift * scale );
+      const uint32_t rays = scene.sky.sun_extent_sin > 0.0f ? params.sun_samples : 1;
+      uint32_t visible = 0;
+
+      for ( uint32_t r = 0; r < rays; ++r )
+      {
+        const vec3 direction = sun_jitter_direction( to_sun, scene.sky.sun_extent_sin, r );
+        if ( closest_geometry( traversable, sky_origin, direction, ray_t_max ) == geom::sky_id &&
+             skybox_clear( scene, traversable, sample.area, sky_origin, direction ) )
+        {
+          ++visible;
+        }
+      }
+
+      if ( visible > 0 )
+        sum += scene.sky.sun_intensity * ( n_dot_l * float( visible ) / float( rays ) );
+    }
+  }
+
+  return sum;
+}
 
 // utils/vrad/lightmap.cpp:1746
-struct sky_sample
+inline vec3 sky_sample( const sample_scene& scene, rtc::traversable traversable,
+    uint32_t luxel_index, const vec3& position, const kernel_params& params )
 {
-  vec3 operator()( const sample_scene& scene, rtc::traversable traversable, uint32_t luxel_index,
-      const vec3& position, const kernel_params& params ) const
+  const luxel& sample = scene.luxels[luxel_index];
+  const face_info& face = scene.faces[sample.face_index];
+  const vec3 origin =
+      position + face.plane_normal * ( sample_lift * offset_scale( sample.position ) );
+  float sum_cos = 0.0f;
+  float sum_visible = 0.0f;
+
+  // utils/vrad/lightmap.cpp:1766
+  for ( uint32_t r = 0; r < params.sky_samples; ++r )
   {
-    const luxel& sample = scene.luxels[luxel_index];
-    const face_info& face = scene.faces[sample.face_index];
-    const vec3 origin =
-        position + face.plane_normal * ( sample_lift * offset_scale( sample.position ) );
-    float sum_cos = 0.0f;
-    float sum_visible = 0.0f;
+    const vec3 direction = -halton_sphere( r + 1 );
+    const float cos_n = glm::dot( sample.normal, direction );
+    if ( cos_n <= sky_cos_cutoff )
+      continue;
 
-    // utils/vrad/lightmap.cpp:1766
-    for ( uint32_t r = 0; r < params.sky_samples; ++r )
+    sum_cos += cos_n;
+
+    if ( closest_geometry( traversable, origin, direction, ray_t_max ) == geom::sky_id &&
+         skybox_clear( scene, traversable, sample.area, origin, direction ) )
     {
-      const vec3 direction = -halton_sphere( r + 1 );
-      const float cos_n = glm::dot( sample.normal, direction );
-      if ( cos_n <= sky_cos_cutoff )
-        continue;
-
-      sum_cos += cos_n;
-
-      if ( closest_geometry( traversable, origin, direction, ray_t_max ) == geom::sky_id &&
-           skybox_clear( scene, traversable, sample.area, origin, direction ) )
-      {
-        sum_visible += cos_n;
-      }
+      sum_visible += cos_n;
     }
-
-    if ( sum_cos <= 0.0f )
-      return vec3( 0.0f );
-
-    return scene.sky.ambient_intensity * ( sum_visible / sum_cos );
   }
-};
 
-template <typename evaluate_t>
+  if ( sum_cos <= 0.0f )
+    return vec3( 0.0f );
+
+  return scene.sky.ambient_intensity * ( sum_visible / sum_cos );
+}
+
+template <auto& evaluate>
 inline void sample_kernel( const sample_scene& scene, rtc::traversable traversable,
-    uint32_t luxel_index, const kernel_params& params, vec3* out, evaluate_t evaluate )
+    uint32_t luxel_index, const kernel_params& params, vec3* out )
 {
   const luxel& sample = scene.luxels[luxel_index];
   out[luxel_index] = sample.world_area > 0.0f
@@ -339,10 +333,10 @@ inline void sample_kernel( const sample_scene& scene, rtc::traversable traversab
 }
 
 // utils/vrad/lightmap.cpp:2943
-template <typename evaluate_t>
+template <auto& evaluate>
 inline void resample_position_kernel( const sample_scene& scene, rtc::traversable traversable,
     const uint32_t* flagged, uint32_t f, uint32_t s, const kernel_params& params, vec3* slots,
-    uint8_t* used, evaluate_t evaluate )
+    uint8_t* used )
 {
   const uint32_t luxel_index = flagged[f];
   const luxel& sample = scene.luxels[luxel_index];
@@ -356,10 +350,10 @@ inline void resample_position_kernel( const sample_scene& scene, rtc::traversabl
     slots[slot] = evaluate( scene, traversable, luxel_index, position, params );
 }
 
-template <typename evaluate_t>
+template <auto& evaluate>
 inline void resample_average_kernel( const sample_scene& scene, rtc::traversable traversable,
     const uint32_t* flagged, uint32_t f, const kernel_params& params, const vec3* slots,
-    const uint8_t* used, vec3* results, evaluate_t evaluate )
+    const uint8_t* used, vec3* results )
 {
   vec3 sum( 0.0f );
   uint32_t count = 0;
