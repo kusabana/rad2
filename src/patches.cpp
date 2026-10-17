@@ -319,9 +319,6 @@ struct patch_tree::builder
     root.normal = safe_normalize( cross );
     root.area = glm::length( cross );
     root.face = face_index;
-    root.child[0] = root.child[1] = -1;
-    root.cluster = -1;
-    root.sky = 0;
 
     tree.face_root[face_index] = int32_t( tree.nodes.size() );
     tree.root_plane[face_index] = vec4( root.normal, glm::dot( root.normal, points[0] ) );
@@ -445,8 +442,6 @@ patch_tree::patch_tree( const bsp_file& bsp, const scene_geometry& geometry )
     root.normal = info.plane_normal;
     root.area = area;
     root.face = uint32_t( face_index );
-    root.child[0] = root.child[1] = -1;
-    root.cluster = -1;
     root.sky = ( texinfo.flags & surf::sky ) ? 1 : 0;
 
     face_root[face_index] = int32_t( nodes.size() );
@@ -571,10 +566,7 @@ std::vector<vec3> patch_tree::add_direct_light(
     if ( node.leaf() )
       continue;
 
-    const patch_node& a = nodes[node.child[0]];
-    const patch_node& b = nodes[node.child[1]];
-    const float sum = a.area + b.area;
-    total[i] = total[node.child[0]] * ( a.area / sum ) + total[node.child[1]] * ( b.area / sum );
+    total[i] = blend_children( node, total );
   }
 
   return total;
@@ -601,10 +593,7 @@ vec3 patch_tree::collect_light(
     }
     else
     {
-      const patch_node& a = nodes[node.child[0]];
-      const patch_node& b = nodes[node.child[1]];
-      const float sum = a.area + b.area;
-      emit[i] = emit[node.child[0]] * ( a.area / sum ) + emit[node.child[1]] * ( b.area / sum );
+      emit[i] = blend_children( node, emit );
     }
   }
 

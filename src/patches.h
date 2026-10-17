@@ -14,11 +14,11 @@ struct patch_node
   vec3 normal;
   float area;
   uint32_t face;
-  int32_t child[2];
+  int32_t child[2] = { -1, -1 };
   uint32_t winding_first;
   uint32_t winding_count;
-  int32_t cluster;
-  uint8_t sky;
+  int32_t cluster = -1;
+  uint8_t sky = 0;
 
   bool leaf() const
   {
@@ -50,6 +50,15 @@ public:
 
 private:
   struct builder;
+
+  // area-weighted average of a node's two children
+  vec3 blend_children( const patch_node& node, const std::vector<vec3>& values ) const
+  {
+    const patch_node& a = nodes[node.child[0]];
+    const patch_node& b = nodes[node.child[1]];
+    const float sum = a.area + b.area;
+    return values[node.child[0]] * ( a.area / sum ) + values[node.child[1]] * ( b.area / sum );
+  }
 
   std::span<const uint32_t> face_leaves( uint32_t face_index ) const
   {
