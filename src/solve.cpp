@@ -57,17 +57,18 @@ public:
     grow( count, 0 );
   }
 
-  void upload( const element_t* host, size_t count )
-  {
-    reserve( count );
-
-    if ( count > 0 )
-      queue_->memcpy( data_, host, count * sizeof( element_t ) ).wait();
-  }
-
   void upload( std::span<const element_t> host )
   {
-    upload( host.data(), host.size() );
+    reserve( host.size() );
+
+    if ( !host.empty() )
+      queue_->memcpy( data_, host.data(), host.size_bytes() ).wait();
+  }
+
+  void download( std::span<element_t> host ) const
+  {
+    if ( !host.empty() )
+      queue_->memcpy( host.data(), data_, host.size_bytes() ).wait();
   }
 
   void grow( size_t count, size_t used )
@@ -217,7 +218,7 @@ void sample_layer( device_scene& device, const sample_scene& scene, const kernel
     pass_progress.set( first + count, scene.luxel_count );
   }
 
-  device.queue.memcpy( layer.data(), out_buffer.data(), scene.luxel_count * sizeof( vec3 ) ).wait();
+  out_buffer.download( layer );
 }
 
 // utils/vrad/lightmap.cpp:2943
@@ -267,8 +268,7 @@ void resample_layer( device_scene& device, const sample_scene& scene, const kern
   }
 
   std::vector<vec3> results( count );
-  device.queue.memcpy( results.data(), result_buffer.data(), size_t( count ) * sizeof( vec3 ) )
-      .wait();
+  result_buffer.download( results );
 
   for ( uint32_t f = 0; f < count; ++f )
     layer[flagged[f]] = results[f];
@@ -534,8 +534,7 @@ void transfer_matrix::gather( const std::vector<vec3>& emit_scaled, std::vector<
         out[leaf] = sum;
       } );
 
-  device_.queue.memcpy( received.data(), received_.data(), received.size() * sizeof( vec3 ) )
-      .wait();
+  received_.download( received );
 }
 
 } // namespace
