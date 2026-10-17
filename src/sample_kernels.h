@@ -156,7 +156,6 @@ struct sample_scene
   const light* lights = nullptr;
   uint32_t light_count = 0;
   sky_light sky = {};
-  uint32_t luxel_count = 0;
 };
 
 // per launch parameters

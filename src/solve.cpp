@@ -197,15 +197,16 @@ template <auto& evaluate>
 void sample_layer( device_scene& device, const sample_scene& scene, const kernel_params& params,
     std::vector<vec3>& layer, progress& pass_progress )
 {
+  const uint32_t luxel_count = uint32_t( layer.size() );
   device_buffer<vec3> out_buffer( device.queue );
-  out_buffer.reserve( scene.luxel_count );
+  out_buffer.reserve( luxel_count );
 
   const rtc::traversable traversable = device.traversable;
   vec3* dev_out = out_buffer.data();
 
-  for ( uint32_t first = 0; first < scene.luxel_count; first += slice_luxels )
+  for ( uint32_t first = 0; first < luxel_count; first += slice_luxels )
   {
-    const uint32_t count = glm::min( slice_luxels, scene.luxel_count - first );
+    const uint32_t count = glm::min( slice_luxels, luxel_count - first );
 
     device.queue
         .parallel_for( sycl::range<1>( count ),
@@ -215,7 +216,7 @@ void sample_layer( device_scene& device, const sample_scene& scene, const kernel
                   scene, traversable, first + uint32_t( index[0] ), params, dev_out );
             } )
         .wait();
-    pass_progress.set( first + count, scene.luxel_count );
+    pass_progress.set( first + count, luxel_count );
   }
 
   out_buffer.download( layer );
@@ -581,8 +582,7 @@ direct_layers direct_light( const scene_geometry& geometry, const luxel_grid& lu
       .edge_planes = edge_plane_buffer.data(),
       .lights = light_buffer.data(),
       .light_count = uint32_t( lights.size() ),
-      .sky = sky,
-      .luxel_count = uint32_t( luxels.samples.size() ) };
+      .sky = sky };
 
   kernel_params params;
   params.sun_samples = settings.sun_samples;
