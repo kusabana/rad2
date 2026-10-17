@@ -7,6 +7,7 @@
 #include "sample_kernels.h"
 #include "transfer_kernels.h"
 
+#include <algorithm>
 #include <format>
 #include <numeric>
 
@@ -29,6 +30,9 @@ sycl::device chosen_device( uint32_t index )
 {
   const std::vector<sycl::device> devices =
       sycl::device::get_devices( sycl::info::device_type::gpu );
+  if ( std::ranges::none_of( devices, rtc::is_supported ) )
+    throw fatal_error( "no usable devices" );
+
   if ( index >= devices.size() || !rtc::is_supported( devices[index] ) )
     throw fatal_error( std::format( "device {} is not usable", index ) );
 
