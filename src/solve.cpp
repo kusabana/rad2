@@ -3,12 +3,10 @@
 #include "solve.h"
 
 #include "filter.h"
+#include "rtc.h"
 #include "sample_kernels.h"
 #include "transfer_kernels.h"
 
-#include <embree4/rtcore.h>
-
-#include <cstring>
 #include <format>
 #include <numeric>
 
@@ -31,32 +29,10 @@ sycl::device chosen_device( uint32_t index )
 {
   const std::vector<sycl::device> devices =
       sycl::device::get_devices( sycl::info::device_type::gpu );
-  if ( index >= devices.size() || !rtcIsSYCLDeviceSupported( devices[index] ) )
+  if ( index >= devices.size() || !rtc::is_supported( devices[index] ) )
     throw fatal_error( std::format( "device {} is not usable", index ) );
 
   return devices[index];
-}
-
-void attach_triangles( RTCDevice device, RTCScene scene, uint32_t geom_id, uint32_t mask,
-    const std::vector<vec3>& vertex_pool, const std::vector<uint32_t>& indices )
-{
-  if ( indices.empty() )
-    return;
-
-  RTCGeometry geometry = rtcNewGeometry( device, RTC_GEOMETRY_TYPE_TRIANGLE );
-
-  vec3* vertices = static_cast<vec3*>( rtcSetNewGeometryBuffer( geometry, RTC_BUFFER_TYPE_VERTEX, 0,
-      RTC_FORMAT_FLOAT3, sizeof( vec3 ), vertex_pool.size() ) );
-  std::memcpy( vertices, vertex_pool.data(), vertex_pool.size() * sizeof( vec3 ) );
-
-  uint32_t* triangles = static_cast<uint32_t*>( rtcSetNewGeometryBuffer( geometry,
-      RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT3, sizeof( uint32_t ) * 3, indices.size() / 3 ) );
-  std::memcpy( triangles, indices.data(), indices.size() * sizeof( uint32_t ) );
-
-  rtcSetGeometryMask( geometry, mask );
-  rtcCommitGeometry( geometry );
-  rtcAttachGeometryByID( scene, geometry, geom_id );
-  rtcReleaseGeometry( geometry );
 }
 
 template <typename element_t> class device_buffer
@@ -145,43 +121,30 @@ class device_scene
 {
 public:
   device_scene( const scene_geometry& geometry, uint32_t device_index )
-      : queue( chosen_device( device_index ), sycl::property::queue::in_order() )
+      : queue( chosen_device( device_index ), sycl::property::queue::in_order() ),
+        device_( queue.get_context() ), scene_( device_ )
   {
-    rtc_device_ = rtcNewSYCLDevice( queue.get_context(), nullptr );
-    if ( !rtc_device_ )
-      throw fatal_error( "rtcNewSYCLDevice failed" );
+    scene_.set_flags( RTC_SCENE_FLAG_ROBUST );
+    scene_.set_build_quality( RTC_BUILD_QUALITY_HIGH );
 
-    scene_ = rtcNewScene( rtc_device_ );
-    rtcSetSceneFlags( scene_, RTC_SCENE_FLAG_ROBUST );
-    rtcSetSceneBuildQuality( scene_, RTC_BUILD_QUALITY_HIGH );
+    scene_.attach_triangles(
+        geom::occluder_id, geom::occluder_mask, geometry.vertices, geometry.occluder_indices );
+    scene_.attach_triangles(
+        geom::sky_id, geom::sky_mask, geometry.vertices, geometry.sky_indices );
 
-    attach_triangles( rtc_device_, scene_, geom::occluder_id, geom::occluder_mask,
-        geometry.vertices, geometry.occluder_indices );
-    attach_triangles( rtc_device_, scene_, geom::sky_id, geom::sky_mask, geometry.vertices,
-        geometry.sky_indices );
-
-    rtcCommitScene( scene_ );
-    traversable = rtcGetSceneTraversable( scene_ );
-  }
-
-  ~device_scene()
-  {
-    if ( scene_ )
-      rtcReleaseScene( scene_ );
-
-    if ( rtc_device_ )
-      rtcReleaseDevice( rtc_device_ );
+    scene_.commit();
+    traversable = scene_.traversable();
   }
 
   device_scene( const device_scene& ) = delete;
   device_scene& operator=( const device_scene& ) = delete;
 
   sycl::queue queue;
-  RTCTraversable traversable = nullptr;
+  rtc::traversable traversable;
 
 private:
-  RTCDevice rtc_device_ = nullptr;
-  RTCScene scene_ = nullptr;
+  rtc::device device_;
+  rtc::scene scene_;
 };
 
 sky_light sky_from( const light_table& table )
@@ -232,7 +195,7 @@ void sample_layer( device_scene& device, const sample_scene& scene, const kernel
   device_buffer<vec3> out_buffer( device.queue );
   out_buffer.reserve( scene.luxel_count );
 
-  const ray_tracer tracer{ device.traversable };
+  const rtc::traversable traversable = device.traversable;
   vec3* dev_out = out_buffer.data();
 
   for ( uint32_t first = 0; first < scene.luxel_count; first += slice_luxels )
@@ -244,7 +207,7 @@ void sample_layer( device_scene& device, const sample_scene& scene, const kernel
             [=]( sycl::id<1> index )
             {
               sample_kernel(
-                  scene, tracer, first + uint32_t( index[0] ), params, dev_out, evaluate );
+                  scene, traversable, first + uint32_t( index[0] ), params, dev_out, evaluate );
             } )
         .wait();
     pass_progress.set( first + count, scene.luxel_count );
@@ -271,7 +234,7 @@ void resample_layer( device_scene& device, const sample_scene& scene, const kern
   used_buffer.reserve( slice_luxels );
   result_buffer.reserve( count );
 
-  const ray_tracer tracer{ device.traversable };
+  const rtc::traversable traversable = device.traversable;
   vec3* dev_slots = slot_buffer.data();
   uint8_t* dev_used = used_buffer.data();
 
@@ -285,7 +248,7 @@ void resample_layer( device_scene& device, const sample_scene& scene, const kern
         [=]( sycl::id<1> index )
         {
           const uint32_t i = uint32_t( index[0] );
-          resample_position_kernel( scene, tracer, slice_flagged, i / positions, i % positions,
+          resample_position_kernel( scene, traversable, slice_flagged, i / positions, i % positions,
               params, dev_slots, dev_used, evaluate );
         } );
 
@@ -293,8 +256,8 @@ void resample_layer( device_scene& device, const sample_scene& scene, const kern
         .parallel_for( sycl::range<1>( slice_count ),
             [=]( sycl::id<1> index )
             {
-              resample_average_kernel( scene, tracer, slice_flagged, uint32_t( index[0] ), params,
-                  dev_slots, dev_used, slice_results, evaluate );
+              resample_average_kernel( scene, traversable, slice_flagged, uint32_t( index[0] ),
+                  params, dev_slots, dev_used, slice_results, evaluate );
             } )
         .wait();
   }
@@ -442,16 +405,15 @@ void transfer_matrix::add_batch( const uint32_t* receivers, uint32_t count, uint
 
   if ( candidates > 0 )
   {
-    RTCTraversable traversable = device_.traversable;
+    rtc::traversable traversable = device_.traversable;
 
     // one work item per candidate ray
     device_.queue.parallel_for( sycl::range<1>( candidates ),
         [=]( sycl::id<1> index )
         {
           const uint32_t k = uint32_t( index[0] );
-          const ray_tracer tracer{ traversable };
           dev_visible[k] =
-              transfer_visible( scene, tracer, dev_candidate_receiver[k], dev_node[k] );
+              transfer_visible( scene, traversable, dev_candidate_receiver[k], dev_node[k] );
         } );
   }
 
@@ -584,7 +546,7 @@ std::vector<compute_device_info> list_devices()
     result.push_back( { .index = index++,
         .name = device.get_info<sycl::info::device::name>(),
         .vendor = device.get_info<sycl::info::device::vendor>(),
-        .embree_supported = rtcIsSYCLDeviceSupported( device ) } );
+        .embree_supported = rtc::is_supported( device ) } );
   }
 
   return result;

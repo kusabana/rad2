@@ -4,8 +4,7 @@
 #include "lights.h"
 #include "luxels.h"
 #include "math.h"
-
-#include <embree4/rtcore.h>
+#include "rtc.h"
 
 #include <cstdint>
 
@@ -128,66 +127,22 @@ enum : uint32_t
 
 constexpr float ray_t_min = 0.01f;
 
-struct trace_ray
-{
-  vec3 origin;
-  vec3 direction;
-  float t_max;
-  uint32_t mask;
-};
+constexpr rtc::feature_flags ray_features =
+    rtc::feature_flags( RTC_FEATURE_FLAG_TRIANGLE | RTC_FEATURE_FLAG_32_BIT_RAY_MASK );
 
-constexpr RTCFeatureFlags ray_features =
-    RTCFeatureFlags( RTC_FEATURE_FLAG_TRIANGLE | RTC_FEATURE_FLAG_32_BIT_RAY_MASK );
-
-inline RTCRay embree_ray( const trace_ray& ray )
+inline uint32_t closest_geometry(
+    rtc::traversable traversable, const vec3& origin, const vec3& direction, float t_max )
 {
-  RTCRay result;
-  result.org_x = ray.origin.x;
-  result.org_y = ray.origin.y;
-  result.org_z = ray.origin.z;
-  result.tnear = ray_t_min;
-  result.dir_x = ray.direction.x;
-  result.dir_y = ray.direction.y;
-  result.dir_z = ray.direction.z;
-  result.time = 0.0f;
-  result.tfar = ray.t_max;
-  result.mask = ray.mask;
-  result.id = 0;
-  result.flags = 0;
-  return result;
+  return traversable.intersect(
+      rtc::ray( origin, direction, ray_t_min, t_max, geom::mask_world ), ray_features );
 }
 
-struct ray_tracer
+inline bool occluded(
+    rtc::traversable traversable, const vec3& origin, const vec3& direction, float t_max )
 {
-  RTCTraversable traversable;
-
-  uint32_t closest_geometry( const trace_ray& ray ) const
-  {
-    RTCRayHit rayhit;
-    rayhit.ray = embree_ray( ray );
-    rayhit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
-    rayhit.hit.primID = RTC_INVALID_GEOMETRY_ID;
-
-    RTCIntersectArguments args;
-    rtcInitIntersectArguments( &args );
-    args.feature_mask = ray_features;
-
-    rtcTraversableIntersect1( traversable, &rayhit, &args );
-    return rayhit.hit.geomID;
-  }
-
-  bool occluded( const trace_ray& ray ) const
-  {
-    RTCRay shadow = embree_ray( ray );
-
-    RTCOccludedArguments args;
-    rtcInitOccludedArguments( &args );
-    args.feature_mask = ray_features;
-
-    rtcTraversableOccluded1( traversable, &shadow, &args );
-    return shadow.tfar < 0.0f;
-  }
-};
+  return traversable.occluded(
+      rtc::ray( origin, direction, ray_t_min, t_max, geom::mask_world ), ray_features );
+}
 
 // public/worldsize.h:32
 // constexpr float ray_t_max = coord_extent * const_sqrt( 3.0f );
@@ -268,22 +223,21 @@ inline bool supersample_position( const sample_scene& scene, const luxel& sample
 }
 
 // utils/vrad/trace.cpp:389
-inline bool skybox_clear( const sample_scene& scene, const ray_tracer& tracer, int32_t area,
+inline bool skybox_clear( const sample_scene& scene, rtc::traversable traversable, int32_t area,
     const vec3& origin, const vec3& direction )
 {
   if ( scene.sky.cam_area < 0 || area == scene.sky.cam_area )
     return true;
 
   const vec3 sky_origin = scene.sky.cam_origin + origin * scene.sky.world_to_sky;
-  const uint32_t hit =
-      tracer.closest_geometry( { sky_origin, direction, ray_t_max, geom::mask_world } );
+  const uint32_t hit = closest_geometry( traversable, sky_origin, direction, ray_t_max );
 
   return hit == RTC_INVALID_GEOMETRY_ID || hit == geom::sky_id;
 }
 
 struct direct_sample
 {
-  vec3 operator()( const sample_scene& scene, const ray_tracer& tracer, uint32_t luxel_index,
+  vec3 operator()( const sample_scene& scene, rtc::traversable traversable, uint32_t luxel_index,
       const vec3& position, const kernel_params& params ) const
   {
     const luxel& sample = scene.luxels[luxel_index];
@@ -300,7 +254,7 @@ struct direct_sample
         continue;
 
       if ( eval.distance > ray_t_min &&
-           tracer.occluded( { shadow_origin, eval.to_light, eval.distance, geom::mask_world } ) )
+           occluded( traversable, shadow_origin, eval.to_light, eval.distance ) )
       {
         continue;
       }
@@ -321,9 +275,8 @@ struct direct_sample
         for ( uint32_t r = 0; r < rays; ++r )
         {
           const vec3 direction = sun_jitter_direction( to_sun, scene.sky.sun_extent_sin, r );
-          if ( tracer.closest_geometry( { sky_origin, direction, ray_t_max, geom::mask_world } ) ==
-                   geom::sky_id &&
-               skybox_clear( scene, tracer, sample.area, sky_origin, direction ) )
+          if ( closest_geometry( traversable, sky_origin, direction, ray_t_max ) == geom::sky_id &&
+               skybox_clear( scene, traversable, sample.area, sky_origin, direction ) )
           {
             ++visible;
           }
@@ -341,7 +294,7 @@ struct direct_sample
 // utils/vrad/lightmap.cpp:1746
 struct sky_sample
 {
-  vec3 operator()( const sample_scene& scene, const ray_tracer& tracer, uint32_t luxel_index,
+  vec3 operator()( const sample_scene& scene, rtc::traversable traversable, uint32_t luxel_index,
       const vec3& position, const kernel_params& params ) const
   {
     const luxel& sample = scene.luxels[luxel_index];
@@ -361,9 +314,8 @@ struct sky_sample
 
       sum_cos += cos_n;
 
-      if ( tracer.closest_geometry( { origin, direction, ray_t_max, geom::mask_world } ) ==
-               geom::sky_id &&
-           skybox_clear( scene, tracer, sample.area, origin, direction ) )
+      if ( closest_geometry( traversable, origin, direction, ray_t_max ) == geom::sky_id &&
+           skybox_clear( scene, traversable, sample.area, origin, direction ) )
       {
         sum_visible += cos_n;
       }
@@ -377,18 +329,18 @@ struct sky_sample
 };
 
 template <typename evaluate_t>
-inline void sample_kernel( const sample_scene& scene, const ray_tracer& tracer,
+inline void sample_kernel( const sample_scene& scene, rtc::traversable traversable,
     uint32_t luxel_index, const kernel_params& params, vec3* out, evaluate_t evaluate )
 {
   const luxel& sample = scene.luxels[luxel_index];
   out[luxel_index] = sample.world_area > 0.0f
-                         ? evaluate( scene, tracer, luxel_index, sample.position, params )
+                         ? evaluate( scene, traversable, luxel_index, sample.position, params )
                          : vec3( 0.0f );
 }
 
 // utils/vrad/lightmap.cpp:2943
 template <typename evaluate_t>
-inline void resample_position_kernel( const sample_scene& scene, const ray_tracer& tracer,
+inline void resample_position_kernel( const sample_scene& scene, rtc::traversable traversable,
     const uint32_t* flagged, uint32_t f, uint32_t s, const kernel_params& params, vec3* slots,
     uint8_t* used, evaluate_t evaluate )
 {
@@ -401,11 +353,11 @@ inline void resample_position_kernel( const sample_scene& scene, const ray_trace
       scene, sample, scene.faces[sample.face_index], s, params.position_samples, position );
 
   if ( used[slot] )
-    slots[slot] = evaluate( scene, tracer, luxel_index, position, params );
+    slots[slot] = evaluate( scene, traversable, luxel_index, position, params );
 }
 
 template <typename evaluate_t>
-inline void resample_average_kernel( const sample_scene& scene, const ray_tracer& tracer,
+inline void resample_average_kernel( const sample_scene& scene, rtc::traversable traversable,
     const uint32_t* flagged, uint32_t f, const kernel_params& params, const vec3* slots,
     const uint8_t* used, vec3* results, evaluate_t evaluate )
 {
@@ -424,7 +376,7 @@ inline void resample_average_kernel( const sample_scene& scene, const ray_tracer
 
   if ( count == 0 )
   {
-    sum = evaluate( scene, tracer, flagged[f], scene.luxels[flagged[f]].position, params );
+    sum = evaluate( scene, traversable, flagged[f], scene.luxels[flagged[f]].position, params );
     count = 1;
   }
 

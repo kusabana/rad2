@@ -164,7 +164,7 @@ inline uint32_t collect_transfer_candidates(
   return count;
 }
 
-inline bool transfer_visible( const transfer_scene& scene, const ray_tracer& tracer,
+inline bool transfer_visible( const transfer_scene& scene, rtc::traversable traversable,
     uint32_t receiver_index, uint32_t shooter_index )
 {
   const patch_node& receiver = scene.nodes[receiver_index];
@@ -173,6 +173,5 @@ inline bool transfer_visible( const transfer_scene& scene, const ray_tracer& tra
   const vec3 delta = shooter.origin + shooter.normal - start;
   const float dist = glm::length( delta );
 
-  return dist > ray_t_min &&
-         !tracer.occluded( { start, delta / dist, dist - ray_t_min, geom::mask_world } );
+  return dist > ray_t_min && !occluded( traversable, start, delta / dist, dist - ray_t_min );
 }
