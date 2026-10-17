@@ -26,13 +26,13 @@ constexpr float steep_gradient = 1.0f / 16.0f;
 constexpr float perceptual_scale = byte_range;
 
 // utils/vrad/radial.cpp:70
-void splat_sample( const vec2& coord, const vec2& cmins, const vec2& cmaxs, const vec3& light,
-    int32_t w, int32_t h, std::vector<vec3>& value, std::vector<float>& weight )
+void splat_sample(
+    const vec2& coord, const vec2& cmins, const vec2& cmaxs, const vec3& light, splat_grid& grid )
 {
   const int32_t s_min = glm::max( int32_t( cmins.x ), 0 );
   const int32_t t_min = glm::max( int32_t( cmins.y ), 0 );
-  const int32_t s_max = glm::min( int32_t( cmaxs.x + radial_ceil_bias ) + 1, int32_t( w ) - 1 );
-  const int32_t t_max = glm::min( int32_t( cmaxs.y + radial_ceil_bias ) + 1, int32_t( h ) - 1 );
+  const int32_t s_max = glm::min( int32_t( cmaxs.x + radial_ceil_bias ) + 1, grid.width - 1 );
+  const int32_t t_max = glm::min( int32_t( cmaxs.y + radial_ceil_bias ) + 1, grid.height - 1 );
 
   for ( int32_t t = t_min; t <= t_max; ++t )
   {
@@ -50,10 +50,7 @@ void splat_sample( const vec2& coord, const vec2& cmins, const vec2& cmaxs, cons
       const float dt = glm::abs( coord.y - float( t ) );
       const float chebyshev = glm::max( glm::max( ds, dt ), radial_min_distance );
 
-      const float r = area / chebyshev;
-      const size_t i = size_t( t * w + s );
-      value[i] += light * r;
-      weight[i] += r;
+      grid.add( s, t, light, area / chebyshev );
     }
   }
 }
@@ -180,8 +177,7 @@ void radial_filter(
         const int32_t w = x0 - m0 + 1;
         const int32_t h = x1 - m1 + 1;
 
-        std::vector<vec3> value( size_t( w ) * size_t( h ) );
-        std::vector<float> weight( size_t( w ) * size_t( h ) );
+        splat_grid grid( w, h );
 
         for ( size_t mi = 0; mi < members.size(); ++mi )
         {
@@ -197,7 +193,7 @@ void radial_filter(
               continue;
 
             splat_sample( sample.luxel_position + off, luxels.cell_mins[index] + off,
-                luxels.cell_maxs[index] + off, delta[index], w, h, value, weight );
+                luxels.cell_maxs[index] + off, delta[index], grid );
           }
         }
 
@@ -252,8 +248,7 @@ void radial_filter(
                 ref_off + world_to_st( ref.world_to_luxel_s, ref.world_to_luxel_t, world_min );
             const vec2 c1 =
                 ref_off + world_to_st( ref.world_to_luxel_s, ref.world_to_luxel_t, world_max );
-            splat_sample(
-                coord, glm::min( c0, c1 ), glm::max( c0, c1 ), delta[index], w, h, value, weight );
+            splat_sample( coord, glm::min( c0, c1 ), glm::max( c0, c1 ), delta[index], grid );
           }
         }
 
@@ -270,14 +265,7 @@ void radial_filter(
             const size_t mk = size_t( int32_t( k / size_t( face.width ) ) + offy ) * size_t( w ) +
                               size_t( int32_t( k % size_t( face.width ) ) + offx );
 
-            if ( weight[mk] > radial_weight_eps )
-            {
-              filtered[index] = value[mk] / weight[mk];
-            }
-            else
-            {
-              filtered[index] = vec3( 0.0f );
-            }
+            filtered[index] = grid.resolve( mk );
           }
         }
       } );

@@ -604,7 +604,7 @@ namespace
 {
 
 void splat_leaf( const patch_tree& tree, const face_info& face, uint32_t face_index, uint32_t leaf,
-    const vec3& light, std::vector<vec3>& value, std::vector<float>& weight )
+    const vec3& light, splat_grid& grid )
 {
   const patch_node& node = tree.nodes[leaf];
   vec2 coord( 0.0f );
@@ -654,11 +654,7 @@ void splat_leaf( const patch_tree& tree, const face_info& face, uint32_t face_in
       const float dt = ( coord.y - float( t ) ) / distt;
       const float r = radial_dist2 - ( ds * ds + dt * dt );
       if ( r > 0.0f )
-      {
-        const size_t i = size_t( t ) * size_t( face.width ) + size_t( s );
-        value[i] += light * r;
-        weight[i] += r;
-      }
+        grid.add( s, t, light, r );
     }
   }
 }
@@ -680,14 +676,13 @@ void patch_tree::splat_bounce( const scene_geometry& geometry, const std::vector
         if ( !face.lightmapped )
           return;
 
-        std::vector<vec3> value( face.luxel_count() );
-        std::vector<float> weight( value.size() );
+        splat_grid grid( face.width, face.height );
 
         const auto splat_face = [&]( uint32_t source_face )
         {
           for ( const uint32_t leaf : face_leaves( source_face ) )
           {
-            splat_leaf( *this, face, uint32_t( face_index ), leaf, bounce[leaf], value, weight );
+            splat_leaf( *this, face, uint32_t( face_index ), leaf, bounce[leaf], grid );
           }
         };
 
@@ -696,11 +691,8 @@ void patch_tree::splat_bounce( const scene_geometry& geometry, const std::vector
         for ( const uint32_t neighbor : geometry.neighbors( uint32_t( face_index ) ) )
           splat_face( neighbor );
 
-        for ( size_t k = 0; k < value.size(); ++k )
-        {
-          const uint32_t index = face.first_luxel + uint32_t( k );
-          delta[index] = weight[k] > radial_weight_eps ? value[k] / weight[k] : vec3( 0.0f );
-        }
+        for ( size_t k = 0; k < face.luxel_count(); ++k )
+          delta[face.first_luxel + k] = grid.resolve( k );
 
         bounce_progress.set( ++splatted, lit_faces );
       } );
