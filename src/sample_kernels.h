@@ -176,9 +176,12 @@ constexpr float light_cutoff = 0.001f;
 constexpr float sky_cos_cutoff = equal_epsilon;
 
 // utils/vrad/lightmap.cpp:2694
-inline bool supersample_position( const sample_scene& scene, const luxel& sample,
-    const face_info& face, uint32_t sample_index, uint32_t sample_count, vec3& position )
+inline bool supersample_position( const sample_scene& scene, uint32_t luxel_index,
+    uint32_t sample_index, uint32_t sample_count, vec3& position )
 {
+  const luxel& sample = scene.luxels[luxel_index];
+  const face_info& face = scene.faces[sample.face_index];
+
   const uint32_t width_shift = sample_count <= 4 ? 1 : 2;
   const uint32_t width = 1u << width_shift;
   const float cscale = 1.0f / float( width );
@@ -188,7 +191,7 @@ inline bool supersample_position( const sample_scene& scene, const luxel& sample
                                   csshift + float( sample_index >> width_shift ) * cscale );
 
   // the cell clipped to the face
-  const uint32_t local = uint32_t( &sample - scene.luxels ) - face.first_luxel;
+  const uint32_t local = luxel_index - face.first_luxel;
   const float cell_s = float( local % uint32_t( face.width ) );
   const float cell_t = float( local / uint32_t( face.width ) );
   if ( candidate.x < cell_s || candidate.x > cell_s + 1.0f || candidate.y < cell_t ||
@@ -330,15 +333,13 @@ inline void resample_position_kernel( const sample_scene& scene, rtc::traversabl
     uint8_t* used )
 {
   const uint32_t luxel_index = flagged[f];
-  const luxel& sample = scene.luxels[luxel_index];
   const uint32_t slot = f * positions + s;
   vec3 position;
 
-  used[slot] =
-      supersample_position( scene, sample, scene.faces[sample.face_index], s, positions, position );
+  used[slot] = supersample_position( scene, luxel_index, s, positions, position );
 
   if ( used[slot] )
-    slots[slot] = evaluate( scene, traversable, sample, position );
+    slots[slot] = evaluate( scene, traversable, scene.luxels[luxel_index], position );
 }
 
 template <auto& evaluate>
