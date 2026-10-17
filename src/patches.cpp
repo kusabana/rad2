@@ -504,18 +504,15 @@ std::vector<vec3> patch_tree::add_direct_light(
     if ( !face.lightmapped || face_root[face_index] < 0 )
       continue;
 
-    const uint32_t leaf_first = face_leaf_first_[face_index];
-    const uint32_t leaf_end = face_leaf_first_[face_index + 1];
-
     std::vector<leaf_bounds> bounds;
 
-    for ( uint32_t l = leaf_first; l < leaf_end; ++l )
+    for ( const uint32_t leaf : face_leaves( uint32_t( face_index ) ) )
     {
-      const patch_node& node = nodes[face_leaves_[l]];
+      const patch_node& node = nodes[leaf];
       if ( node.sky )
         continue;
 
-      leaf_bounds b{ face_leaves_[l], vec3( float_max ), vec3( float_lowest ) };
+      leaf_bounds b{ leaf, vec3( float_max ), vec3( float_lowest ) };
 
       for ( uint32_t j = 0; j < node.winding_count; ++j )
       {
@@ -699,21 +696,16 @@ void patch_tree::splat_bounce( const scene_geometry& geometry, const std::vector
 
         const auto splat_face = [&]( uint32_t source_face )
         {
-          for ( uint32_t l = face_leaf_first_[source_face]; l < face_leaf_first_[source_face + 1];
-              ++l )
+          for ( const uint32_t leaf : face_leaves( source_face ) )
           {
-            const uint32_t leaf = face_leaves_[l];
             splat_leaf( *this, face, uint32_t( face_index ), leaf, bounce[leaf], value, weight );
           }
         };
 
         splat_face( uint32_t( face_index ) );
 
-        for ( uint32_t n = geometry.face_neighbor_first[face_index];
-            n < geometry.face_neighbor_first[face_index + 1]; ++n )
-        {
-          splat_face( geometry.face_neighbors[n] );
-        }
+        for ( const uint32_t neighbor : geometry.neighbors( uint32_t( face_index ) ) )
+          splat_face( neighbor );
 
         for ( size_t k = 0; k < value.size(); ++k )
         {

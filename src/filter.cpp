@@ -207,10 +207,8 @@ void radial_filter(
 
         for ( const uint32_t fi : members )
         {
-          for ( uint32_t n = geometry.face_neighbor_first[fi];
-              n < geometry.face_neighbor_first[fi + 1]; ++n )
+          for ( const uint32_t neighbor_index : geometry.neighbors( fi ) )
           {
-            const uint32_t neighbor_index = geometry.face_neighbors[n];
             const face_info& neighbor = geometry.faces[neighbor_index];
             if ( !neighbor.lightmapped )
               continue;

@@ -51,6 +51,13 @@ public:
 private:
   struct builder;
 
+  std::span<const uint32_t> face_leaves( uint32_t face_index ) const
+  {
+    return std::span( face_leaves_ )
+        .subspan( face_leaf_first_[face_index],
+            face_leaf_first_[face_index + 1] - face_leaf_first_[face_index] );
+  }
+
   std::vector<uint32_t> face_leaf_first_;
   std::vector<uint32_t> face_leaves_;
 };

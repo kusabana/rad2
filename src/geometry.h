@@ -60,6 +60,13 @@ public:
 
   vec3 phong_normal( uint32_t face_index, const vec3& spot ) const;
 
+  std::span<const uint32_t> neighbors( uint32_t face_index ) const
+  {
+    return std::span( face_neighbors )
+        .subspan( face_neighbor_first[face_index],
+            face_neighbor_first[face_index + 1] - face_neighbor_first[face_index] );
+  }
+
   std::vector<vec3> vertices;
   std::vector<uint32_t> sky_indices;
   std::vector<uint32_t> occluder_indices;
