@@ -177,7 +177,7 @@ void run( const cli_config& config )
 
   bsp_file bsp( config.bsp_path );
 
-  log_info( "loaded {} (map revision {})", config.bsp_path.string(), bsp.map_revision() );
+  log_info( "loaded {}", config.bsp_path.string() );
 
   lighting_targets targets = config.targets;
   if ( bsp.version() == 19 && targets != lighting_targets::ldr_only )
