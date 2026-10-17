@@ -236,9 +236,8 @@ inline bool skybox_clear( const sample_scene& scene, rtc::traversable traversabl
 }
 
 inline vec3 direct_sample( const sample_scene& scene, rtc::traversable traversable,
-    uint32_t luxel_index, const vec3& position, const kernel_params& params )
+    const luxel& sample, const vec3& position, const kernel_params& params )
 {
-  const luxel& sample = scene.luxels[luxel_index];
   const face_info& face = scene.faces[sample.face_index];
   const float scale = offset_scale( sample.position );
   const vec3 shadow_origin = position + face.plane_normal * ( sample_lift * scale );
@@ -290,9 +289,8 @@ inline vec3 direct_sample( const sample_scene& scene, rtc::traversable traversab
 
 // utils/vrad/lightmap.cpp:1746
 inline vec3 sky_sample( const sample_scene& scene, rtc::traversable traversable,
-    uint32_t luxel_index, const vec3& position, const kernel_params& params )
+    const luxel& sample, const vec3& position, const kernel_params& params )
 {
-  const luxel& sample = scene.luxels[luxel_index];
   const face_info& face = scene.faces[sample.face_index];
   const vec3 origin =
       position + face.plane_normal * ( sample_lift * offset_scale( sample.position ) );
@@ -328,7 +326,7 @@ inline void sample_kernel( const sample_scene& scene, rtc::traversable traversab
 {
   const luxel& sample = scene.luxels[luxel_index];
   out[luxel_index] = sample.world_area > 0.0f
-                         ? evaluate( scene, traversable, luxel_index, sample.position, params )
+                         ? evaluate( scene, traversable, sample, sample.position, params )
                          : vec3( 0.0f );
 }
 
@@ -347,7 +345,7 @@ inline void resample_position_kernel( const sample_scene& scene, rtc::traversabl
       scene, sample, scene.faces[sample.face_index], s, params.position_samples, position );
 
   if ( used[slot] )
-    slots[slot] = evaluate( scene, traversable, luxel_index, position, params );
+    slots[slot] = evaluate( scene, traversable, sample, position, params );
 }
 
 template <auto& evaluate>
@@ -370,7 +368,8 @@ inline void resample_average_kernel( const sample_scene& scene, rtc::traversable
 
   if ( count == 0 )
   {
-    sum = evaluate( scene, traversable, flagged[f], scene.luxels[flagged[f]].position, params );
+    const luxel& sample = scene.luxels[flagged[f]];
+    sum = evaluate( scene, traversable, sample, sample.position, params );
     count = 1;
   }
 
