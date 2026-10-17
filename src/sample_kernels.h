@@ -156,12 +156,6 @@ struct sample_scene
   const light* lights = nullptr;
   uint32_t light_count = 0;
   sky_light sky = {};
-};
-
-// per launch parameters
-struct kernel_params
-{
-  uint32_t position_samples = 0;
   uint32_t sun_samples = 0;
   uint32_t sky_samples = 0;
 };
@@ -235,7 +229,7 @@ inline bool skybox_clear( const sample_scene& scene, rtc::traversable traversabl
 }
 
 inline vec3 direct_sample( const sample_scene& scene, rtc::traversable traversable,
-    const luxel& sample, const vec3& position, const kernel_params& params )
+    const luxel& sample, const vec3& position )
 {
   const face_info& face = scene.faces[sample.face_index];
   const float scale = offset_scale( sample.position );
@@ -265,7 +259,7 @@ inline vec3 direct_sample( const sample_scene& scene, rtc::traversable traversab
     if ( n_dot_l > 0.0f )
     {
       const vec3 sky_origin = position + face.plane_normal * ( sample_lift * scale );
-      const uint32_t rays = scene.sky.sun_extent_sin > 0.0f ? params.sun_samples : 1;
+      const uint32_t rays = scene.sky.sun_extent_sin > 0.0f ? scene.sun_samples : 1;
       uint32_t visible = 0;
 
       for ( uint32_t r = 0; r < rays; ++r )
@@ -288,7 +282,7 @@ inline vec3 direct_sample( const sample_scene& scene, rtc::traversable traversab
 
 // utils/vrad/lightmap.cpp:1746
 inline vec3 sky_sample( const sample_scene& scene, rtc::traversable traversable,
-    const luxel& sample, const vec3& position, const kernel_params& params )
+    const luxel& sample, const vec3& position )
 {
   const face_info& face = scene.faces[sample.face_index];
   const vec3 origin =
@@ -297,7 +291,7 @@ inline vec3 sky_sample( const sample_scene& scene, rtc::traversable traversable,
   float sum_visible = 0.0f;
 
   // utils/vrad/lightmap.cpp:1766
-  for ( uint32_t r = 0; r < params.sky_samples; ++r )
+  for ( uint32_t r = 0; r < scene.sky_samples; ++r )
   {
     const vec3 direction = -halton_sphere( r + 1 );
     const float cos_n = glm::dot( sample.normal, direction );
@@ -320,44 +314,44 @@ inline vec3 sky_sample( const sample_scene& scene, rtc::traversable traversable,
 }
 
 template <auto& evaluate>
-inline void sample_kernel( const sample_scene& scene, rtc::traversable traversable,
-    uint32_t luxel_index, const kernel_params& params, vec3* out )
+inline void sample_kernel(
+    const sample_scene& scene, rtc::traversable traversable, uint32_t luxel_index, vec3* out )
 {
   const luxel& sample = scene.luxels[luxel_index];
   out[luxel_index] = sample.world_area > 0.0f
-                         ? evaluate( scene, traversable, sample, sample.position, params )
+                         ? evaluate( scene, traversable, sample, sample.position )
                          : vec3( 0.0f );
 }
 
 // utils/vrad/lightmap.cpp:2943
 template <auto& evaluate>
 inline void resample_position_kernel( const sample_scene& scene, rtc::traversable traversable,
-    const uint32_t* flagged, uint32_t f, uint32_t s, const kernel_params& params, vec3* slots,
+    const uint32_t* flagged, uint32_t f, uint32_t s, uint32_t positions, vec3* slots,
     uint8_t* used )
 {
   const uint32_t luxel_index = flagged[f];
   const luxel& sample = scene.luxels[luxel_index];
-  const uint32_t slot = f * params.position_samples + s;
+  const uint32_t slot = f * positions + s;
   vec3 position;
 
-  used[slot] = supersample_position(
-      scene, sample, scene.faces[sample.face_index], s, params.position_samples, position );
+  used[slot] =
+      supersample_position( scene, sample, scene.faces[sample.face_index], s, positions, position );
 
   if ( used[slot] )
-    slots[slot] = evaluate( scene, traversable, sample, position, params );
+    slots[slot] = evaluate( scene, traversable, sample, position );
 }
 
 template <auto& evaluate>
 inline void resample_average_kernel( const sample_scene& scene, rtc::traversable traversable,
-    const uint32_t* flagged, uint32_t f, const kernel_params& params, const vec3* slots,
-    const uint8_t* used, vec3* results )
+    const uint32_t* flagged, uint32_t f, uint32_t positions, const vec3* slots, const uint8_t* used,
+    vec3* results )
 {
   vec3 sum( 0.0f );
   uint32_t count = 0;
 
-  for ( uint32_t s = 0; s < params.position_samples; ++s )
+  for ( uint32_t s = 0; s < positions; ++s )
   {
-    const uint32_t slot = f * params.position_samples + s;
+    const uint32_t slot = f * positions + s;
     if ( used[slot] )
     {
       sum += slots[slot];
@@ -368,7 +362,7 @@ inline void resample_average_kernel( const sample_scene& scene, rtc::traversable
   if ( count == 0 )
   {
     const luxel& sample = scene.luxels[flagged[f]];
-    sum = evaluate( scene, traversable, sample, sample.position, params );
+    sum = evaluate( scene, traversable, sample, sample.position );
     count = 1;
   }
 

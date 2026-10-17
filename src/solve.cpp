@@ -194,8 +194,8 @@ std::vector<light> point_lights( const light_table& table )
 }
 
 template <auto& evaluate>
-void sample_layer( device_scene& device, const sample_scene& scene, const kernel_params& params,
-    std::vector<vec3>& layer, progress& pass_progress )
+void sample_layer( device_scene& device, const sample_scene& scene, std::vector<vec3>& layer,
+    progress& pass_progress )
 {
   const uint32_t luxel_count = uint32_t( layer.size() );
   device_buffer<vec3> out_buffer( device.queue );
@@ -212,8 +212,7 @@ void sample_layer( device_scene& device, const sample_scene& scene, const kernel
         .parallel_for( sycl::range<1>( count ),
             [=]( sycl::id<1> index )
             {
-              sample_kernel<evaluate>(
-                  scene, traversable, first + uint32_t( index[0] ), params, dev_out );
+              sample_kernel<evaluate>( scene, traversable, first + uint32_t( index[0] ), dev_out );
             } )
         .wait();
     pass_progress.set( first + count, luxel_count );
@@ -224,11 +223,10 @@ void sample_layer( device_scene& device, const sample_scene& scene, const kernel
 
 // utils/vrad/lightmap.cpp:2943
 template <auto& evaluate>
-void resample_layer( device_scene& device, const sample_scene& scene, const kernel_params& params,
+void resample_layer( device_scene& device, const sample_scene& scene, uint32_t positions,
     std::span<const uint32_t> flagged, std::vector<vec3>& layer )
 {
   const uint32_t count = uint32_t( flagged.size() );
-  const uint32_t positions = params.position_samples;
   const uint32_t slice = slice_luxels / positions;
 
   device_buffer<uint32_t> flagged_buffer( device.queue );
@@ -255,7 +253,7 @@ void resample_layer( device_scene& device, const sample_scene& scene, const kern
         {
           const uint32_t i = uint32_t( index[0] );
           resample_position_kernel<evaluate>( scene, traversable, slice_flagged, i / positions,
-              i % positions, params, dev_slots, dev_used );
+              i % positions, positions, dev_slots, dev_used );
         } );
 
     device.queue
@@ -263,7 +261,7 @@ void resample_layer( device_scene& device, const sample_scene& scene, const kern
             [=]( sycl::id<1> index )
             {
               resample_average_kernel<evaluate>( scene, traversable, slice_flagged,
-                  uint32_t( index[0] ), params, dev_slots, dev_used, slice_results );
+                  uint32_t( index[0] ), positions, dev_slots, dev_used, slice_results );
             } )
         .wait();
   }
@@ -582,11 +580,9 @@ direct_layers direct_light( const scene_geometry& geometry, const luxel_grid& lu
       .edge_planes = edge_plane_buffer.data(),
       .lights = light_buffer.data(),
       .light_count = uint32_t( lights.size() ),
-      .sky = sky };
-
-  kernel_params params;
-  params.sun_samples = settings.sun_samples;
-  params.sky_samples = settings.sky_samples;
+      .sky = sky,
+      .sun_samples = settings.sun_samples,
+      .sky_samples = settings.sky_samples };
 
   const size_t luxel_count = luxels.samples.size();
   std::vector<vec3> direct( luxel_count );
@@ -595,13 +591,13 @@ direct_layers direct_light( const scene_geometry& geometry, const luxel_grid& lu
 
   {
     progress lights_progress( std::format( "[{}] lights", name ) );
-    sample_layer<direct_sample>( device, scene, params, direct, lights_progress );
+    sample_layer<direct_sample>( device, scene, direct, lights_progress );
   }
 
   if ( ambient )
   {
     progress sky_progress( std::format( "[{}] sky", name ) );
-    sample_layer<sky_sample>( device, scene, params, sky_light, sky_progress );
+    sample_layer<sky_sample>( device, scene, sky_light, sky_progress );
   }
 
   // extra sampling of steep gradients
@@ -619,13 +615,12 @@ direct_layers direct_light( const scene_geometry& geometry, const luxel_grid& lu
     if ( flagged.empty() )
       break;
 
-    params.position_samples = settings.position_samples;
-    resample_layer<direct_sample>( device, scene, params, flagged, direct );
+    resample_layer<direct_sample>( device, scene, settings.position_samples, flagged, direct );
 
     if ( ambient )
     {
-      params.position_samples = settings.sky_position_samples;
-      resample_layer<sky_sample>( device, scene, params, flagged, sky_light );
+      resample_layer<sky_sample>(
+          device, scene, settings.sky_position_samples, flagged, sky_light );
     }
 
     resample_progress.set( size_t( pass ) + 1, resample_passes );
