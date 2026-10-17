@@ -62,18 +62,16 @@ template <typename number_t> number_t parse_number( std::string_view flag, std::
 cli_config parse_command_line( int argc, char** argv )
 {
   cli_config config;
-  bool have_bsp = false;
 
   for ( int index = 1; index < argc; ++index )
   {
     const std::string_view flag = argv[index];
     if ( !flag.empty() && flag[0] != '-' )
     {
-      if ( have_bsp )
+      if ( !config.bsp_path.empty() )
         throw cli_error( std::format( "unexpected argument '{}'", flag ) );
 
       config.bsp_path = flag;
-      have_bsp = true;
       continue;
     }
 
@@ -129,7 +127,7 @@ cli_config parse_command_line( int argc, char** argv )
     }
   }
 
-  if ( !have_bsp && !config.list_devices )
+  if ( config.bsp_path.empty() && !config.list_devices )
     throw cli_error( "no bsp file given" );
 
   if ( config.output_path.empty() )
